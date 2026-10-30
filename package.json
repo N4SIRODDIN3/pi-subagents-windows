@@ -10,6 +10,14 @@
     "subagents",
     "windows"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/N4SIRODDIN3/pi-subagents-windows.git"
+  },
+  "homepage": "https://github.com/N4SIRODDIN3/pi-subagents-windows",
+  "bugs": {
+    "url": "https://github.com/N4SIRODDIN3/pi-subagents-windows/issues"
+  },
   "files": [
     "index.ts",
     "extensions/subagents",
