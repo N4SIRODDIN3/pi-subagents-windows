@@ -8,8 +8,11 @@
     "strict": true,
     "noImplicitAny": true,
     "skipLibCheck": true,
-    "types": ["node", "bun-types"],
+    "types": ["node", "bun"],
     "lib": ["ES2023", "DOM"]
   },
-  "include": ["./**/*.ts"]
+  "include": [
+    "../index.ts",
+    "../extensions/subagents/**/*.ts"
+  ]
 }

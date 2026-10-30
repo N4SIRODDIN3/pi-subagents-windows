@@ -1,5 +1,16 @@
-generated_images
-sessions
+node_modules/
+coverage/
+dist/
+*.tsbuildinfo
+
+# Pi runtime and local credentials
+generated_images/
+sessions/
 auth.json
 models.json
 trust.json
+
+# Local environment files
+.env
+.env.*
+!.env.example
