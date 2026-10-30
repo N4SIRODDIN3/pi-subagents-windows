@@ -4,6 +4,7 @@ import { generateSummary, type ExtensionContext } from "@earendil-works/pi-codin
 import type { CompletionPayload, SubagentRecord, SubagentSettings } from "../types.ts";
 import {
   bytes,
+  concreteProviderHeaders,
   formatTokens,
   oneLine,
   safeWriteText,
@@ -64,7 +65,7 @@ export async function summarizeOutputForPayload(
           model,
           Math.max(1_000, Math.floor(settings.returnMaxBytes / 8)),
           auth.apiKey,
-          auth.headers,
+          concreteProviderHeaders(auth.headers),
           signal,
           "Summarize this sub-agent final output for the parent model. Preserve conclusions, evidence, files changed/read, commands, risks, blockers, and next steps. Do not include the full transcript.",
           undefined,

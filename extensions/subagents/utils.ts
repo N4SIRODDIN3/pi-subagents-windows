@@ -112,6 +112,23 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Pi's model registry returns `ProviderHeaders` (`string | null` values), while
+ * compaction's `generateSummary` accepts only concrete string headers. Drop
+ * null-valued entries instead of casting so a provider's explicit "no header"
+ * cannot reach the summarizer as the literal `"null"`.
+ */
+export function concreteProviderHeaders(
+  headers: Record<string, string | null> | undefined,
+): Record<string, string> | undefined {
+  if (!headers) return undefined;
+  const result: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (typeof value === "string") result[name] = value;
+  }
+  return result;
+}
+
 /** Validate semantic non-emptiness without normalizing the caller's bytes. */
 export function requireNonEmptyString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim())

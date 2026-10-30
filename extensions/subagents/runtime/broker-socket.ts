@@ -7,6 +7,30 @@ import { validateSafeBasename } from "./agent-path.ts";
 
 const BROKER_SOCKET_NAME_RE = /^[a-f0-9]{24}\.sock$/;
 const MAX_SCAVENGE_CANDIDATES = 256;
+const WINDOWS_PIPE_ROOT = String.raw`\\.\pipe`;
+const WINDOWS_PIPE_PATH_RE = /^\\\\\.\\pipe\\pi-subagents-[a-f0-9]{24}$/;
+
+/**
+ * Windows has no Unix sockets. The broker endpoint is a named pipe instead,
+ * which the OS scopes to the creating user's session and removes when the last
+ * handle closes. Permission-bit, inode, and symlink checks do not apply there.
+ */
+function usesNamedPipes(platform: NodeJS.Platform): boolean {
+  return platform === "win32";
+}
+
+export function isBrokerPipePath(socketPath: string): boolean {
+  return WINDOWS_PIPE_PATH_RE.test(socketPath);
+}
+
+function verifyBrokerPipePath(socketPath: string): void {
+  if (!isBrokerPipePath(socketPath))
+    throw new Error(
+      `Unsafe broker pipe path; expected ${WINDOWS_PIPE_ROOT}\\pi-subagents-<24 hex>`,
+    );
+}
+
+const PIPE_IDENTITY: SocketIdentity = Object.freeze({ dev: 0, ino: 0 });
 
 export interface SocketIdentity {
   readonly dev: number;
@@ -26,26 +50,39 @@ export interface BrokerSocketMaintenanceResult {
   readonly removed: string[];
 }
 
-export function defaultBrokerSocketDirectory(): string {
+export function defaultBrokerSocketDirectory(
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (usesNamedPipes(platform)) return WINDOWS_PIPE_ROOT;
   return path.join(
     os.tmpdir(),
     `pi-subagents-${process.getuid?.() ?? process.pid}`,
   );
 }
 
-export function makeBrokerSocketPath(rootId: string): string {
+export function makeBrokerSocketPath(
+  rootId: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
   validateSafeBasename(rootId, "root session id");
   const digest = crypto
     .createHash("sha256")
     .update(`${rootId}:${process.pid}:${crypto.randomBytes(16).toString("hex")}`)
     .digest("hex")
     .slice(0, 24);
-  return path.join(defaultBrokerSocketDirectory(), `${digest}.sock`);
+  if (usesNamedPipes(platform))
+    return `${WINDOWS_PIPE_ROOT}\\pi-subagents-${digest}`;
+  return path.join(defaultBrokerSocketDirectory(platform), `${digest}.sock`);
 }
 
 export function prepareBrokerSocketLocation(
   socketPath: string,
+  platform: NodeJS.Platform = process.platform,
 ): PreparedSocketLocation {
+  if (usesNamedPipes(platform)) {
+    verifyBrokerPipePath(socketPath);
+    return { directoryIdentity: PIPE_IDENTITY, createdDirectory: false };
+  }
   if (!path.isAbsolute(socketPath))
     throw new Error("Broker socket path must be absolute");
   const parent = path.dirname(socketPath);
@@ -69,12 +106,26 @@ export function prepareBrokerSocketLocation(
   return { directoryIdentity, createdDirectory };
 }
 
-export function secureAndVerifyBrokerSocket(socketPath: string): SocketIdentity {
+export function secureAndVerifyBrokerSocket(
+  socketPath: string,
+  platform: NodeJS.Platform = process.platform,
+): SocketIdentity {
+  if (usesNamedPipes(platform)) {
+    verifyBrokerPipePath(socketPath);
+    return PIPE_IDENTITY;
+  }
   fs.chmodSync(socketPath, 0o600);
-  return verifyBrokerSocket(socketPath);
+  return verifyBrokerSocket(socketPath, platform);
 }
 
-export function verifyBrokerSocket(socketPath: string): SocketIdentity {
+export function verifyBrokerSocket(
+  socketPath: string,
+  platform: NodeJS.Platform = process.platform,
+): SocketIdentity {
+  if (usesNamedPipes(platform)) {
+    verifyBrokerPipePath(socketPath);
+    return PIPE_IDENTITY;
+  }
   const stat = fs.lstatSync(socketPath);
   if (!stat.isSocket() || stat.isSymbolicLink())
     throw new Error("Broker endpoint is not a Unix socket");
@@ -88,8 +139,18 @@ export function verifyBrokerSocket(socketPath: string): SocketIdentity {
 
 export async function maintainBrokerSockets(
   directory = defaultBrokerSocketDirectory(),
-  options: { apply?: boolean; excludeSocketPath?: string } = {},
+  options: {
+    apply?: boolean;
+    excludeSocketPath?: string;
+    platform?: NodeJS.Platform;
+  } = {},
 ): Promise<BrokerSocketMaintenanceResult> {
+  const platform = options.platform ?? process.platform;
+  const mode = options.apply === true ? "apply" : "dry-run" as const;
+  if (usesNamedPipes(platform)) {
+    // Named pipes carry no persistent filesystem entry to scavenge or remove.
+    return { directory, mode, stale: [], removed: [] };
+  }
   if (!path.isAbsolute(directory))
     throw new Error("Broker socket maintenance directory must be absolute");
   const result: BrokerSocketMaintenanceResult = {
@@ -145,10 +206,12 @@ export async function maintainBrokerSockets(
 export async function scavengeStaleBrokerSockets(
   directory: string,
   ownSocketPath: string,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<BrokerSocketMaintenanceResult> {
   return maintainBrokerSockets(directory, {
     apply: true,
     excludeSocketPath: ownSocketPath,
+    platform,
   });
 }
 
@@ -157,7 +220,12 @@ export function safeRemoveBrokerSocket(
   socketIdentityValue?: SocketIdentity,
   directoryIdentity?: SocketIdentity,
   removeDirectory = false,
+  platform: NodeJS.Platform = process.platform,
 ): void {
+  if (usesNamedPipes(platform)) {
+    // The OS releases the pipe when the listening handle closes.
+    return;
+  }
   if (socketIdentityValue) {
     try {
       const stat = fs.lstatSync(socketPath);

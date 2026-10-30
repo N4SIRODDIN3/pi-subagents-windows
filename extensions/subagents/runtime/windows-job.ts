@@ -3,7 +3,9 @@ import {
   type ChildProcessWithoutNullStreams,
   type SpawnOptions,
 } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { PassThrough } from "node:stream";
 
@@ -51,6 +53,8 @@ export interface WindowsJobLaunchOptions {
   spawnHelper?: SpawnWindowsJobHelper;
   timeoutMs?: number;
   forceKill?: (pid: number) => void;
+  /** Cached compiled launcher assembly path; `undefined` uses the default cache and `null` disables it. */
+  assemblyPath?: string | null;
 }
 
 export interface TrustedPowerShellResolutionOptions {
@@ -184,7 +188,22 @@ public static class PiWindowsJobLauncher {
   }
 }
 '@
-Add-Type -TypeDefinition $source -Language CSharp
+$assembly = $env:PI_WINDOWS_JOB_ASSEMBLY
+if (-not $assembly) { Add-Type -TypeDefinition $source -Language CSharp }
+else {
+  $loaded = $false
+  if (Test-Path -LiteralPath $assembly) {
+    try { [void][Reflection.Assembly]::LoadFrom($assembly); $loaded = $true } catch { $loaded = $false }
+  }
+  if (-not $loaded) {
+    $directory = Split-Path -Parent $assembly
+    if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Force -Path $directory) }
+    $staging = "$assembly.$PID.tmp"
+    Add-Type -TypeDefinition $source -Language CSharp -OutputAssembly $staging -OutputType Library
+    Move-Item -Force -LiteralPath $staging -Destination $assembly
+    [void][Reflection.Assembly]::LoadFrom($assembly)
+  }
+}
 $payloadJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PI_WINDOWS_JOB_LAUNCH))
 $payload = $payloadJson | ConvertFrom-Json
 foreach ($entry in [Environment]::GetEnvironmentVariables().Keys) {
@@ -198,7 +217,7 @@ $exitCode = [PiWindowsJobLauncher]::Run(
   [string[]]$payload.args,
   [string]$payload.cwd
 )
-[Environment]::Exit($exitCode)
+exit $exitCode
 `;
 
 export class WindowsJob implements WindowsJobHandle {
@@ -306,7 +325,12 @@ export function launchWindowsJobProcess(
   }), "utf8").toString("base64");
   const powershell = (launchOptions.resolvePowerShell ?? resolveTrustedPowerShell)();
   const encoded = Buffer.from(WINDOWS_JOB_LAUNCHER, "utf16le").toString("base64");
-  const helperEnv = minimalPowerShellEnvironment(payload);
+  const helperEnv = minimalPowerShellEnvironment(
+    payload,
+    launchOptions.assemblyPath === undefined
+      ? windowsJobAssemblyPath()
+      : launchOptions.assemblyPath ?? undefined,
+  );
   const helper = (launchOptions.spawnHelper ?? defaultSpawnHelper)(powershell, [
     "-NoLogo",
     "-NoProfile",
@@ -417,12 +441,41 @@ function filterAtomicAssignmentMarker(
   });
 }
 
-function minimalPowerShellEnvironment(payload: string): NodeJS.ProcessEnv {
+function minimalPowerShellEnvironment(
+  payload: string,
+  assembly?: string,
+): NodeJS.ProcessEnv {
   return {
     SystemRoot: PROTECTED_WINDOWS_ROOT,
     WINDIR: PROTECTED_WINDOWS_ROOT,
     PI_WINDOWS_JOB_LAUNCH: payload,
+    ...(assembly ? { PI_WINDOWS_JOB_ASSEMBLY: assembly } : {}),
   };
+}
+
+const LAUNCHER_SOURCE_HASH = crypto
+  .createHash("sha256")
+  .update(WINDOWS_JOB_LAUNCHER)
+  .digest("hex")
+  .slice(0, 16);
+
+/**
+ * Compiling the launcher costs roughly 2.5s per PowerShell invocation, which
+ * dominated Windows child startup. Cache the compiled assembly per user and per
+ * launcher-source revision so each launch pays only PowerShell startup.
+ * Callers may disable the cache (tests, restricted environments) and fall back
+ * to compiling inline.
+ */
+export function windowsJobAssemblyPath(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const localAppData = env.LOCALAPPDATA;
+  if (!localAppData || !path.win32.isAbsolute(localAppData)) return undefined;
+  return path.win32.join(
+    localAppData,
+    "pi-subagents",
+    `PiWindowsJobLauncher.${LAUNCHER_SOURCE_HASH}.dll`,
+  );
 }
 
 function errorMessage(error: unknown): string {

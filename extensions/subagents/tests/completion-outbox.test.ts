@@ -91,7 +91,7 @@ describe("child-self completion outbox", () => {
       return root;
     });
     const results = await Promise.all(roots.map(async (root, index) => {
-      const child = Bun.spawn(["bun", fixture, root, `output-${index}`], {
+      const child = Bun.spawn([process.execPath, fixture, root, `output-${index}`], {
         env: buildChildEnvironment({}, ["HOME", "PATH", "TMPDIR"]),
         stdout: "pipe",
         stderr: "pipe",
