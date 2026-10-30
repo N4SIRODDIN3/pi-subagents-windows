@@ -1,0 +1,10 @@
+{
+  "extends": "./tests/tsconfig.json",
+  "include": [
+    "index.ts",
+    "extensions/subagents/**/*.ts"
+  ],
+  "exclude": [
+    "extensions/subagents/tests"
+  ]
+}
