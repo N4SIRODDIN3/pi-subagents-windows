@@ -38,7 +38,11 @@ import {
   createProcessOwnership,
   type ProcessOwnership,
 } from "./runtime/process-ownership.ts";
-import type { WindowsJobHandle } from "./runtime/windows-job.ts";
+import {
+  launchWindowsJobProcess,
+  type WindowsJobHandle,
+  type WindowsJobLaunch,
+} from "./runtime/windows-job.ts";
 
 const DEFAULT_PENDING_REQUEST_LIMIT = 1_024;
 const DEFAULT_TOMBSTONE_LIMIT = 1_024;
@@ -213,6 +217,12 @@ export type RpcSpawnProcess = (
   options: SpawnOptions,
 ) => ChildProcessWithoutNullStreams;
 
+export type RpcLaunchWindowsProcess = (
+  command: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => WindowsJobLaunch;
+
 export interface RpcProcessOptions {
   cwd: string;
   env: Record<string, string | undefined>;
@@ -231,6 +241,7 @@ export interface RpcProcessOptions {
   /** Internal platform seam for ownership transport regression tests. */
   platform?: NodeJS.Platform;
   createWindowsJob?: () => WindowsJobHandle;
+  launchWindowsProcess?: RpcLaunchWindowsProcess;
   spawnProcess?: RpcSpawnProcess;
 }
 
@@ -340,6 +351,7 @@ export class RpcProcess {
     this.ignoreDeferredRejections();
 
     let proc: ChildProcessWithoutNullStreams;
+    let windowsJob: WindowsJobHandle | undefined;
     let discoverSystemdScope = false;
     let systemdScopeUnit: string | undefined;
     try {
@@ -415,13 +427,21 @@ export class RpcProcess {
         childEnv.DBUS_SESSION_BUS_ADDRESS = process.env.DBUS_SESSION_BUS_ADDRESS ??
           (runtimeDir ? `unix:path=${runtimeDir}/bus` : undefined);
       }
-      proc = spawnProcess(command, args, {
+      const spawnOptions: SpawnOptions = {
         cwd: this.options.cwd,
         env: childEnv,
         stdio: ["pipe", "pipe", "pipe"],
         shell: false,
         detached,
-      });
+      };
+      if (runtimePlatform === "win32" && !this.options.spawnProcess) {
+        const launched = (this.options.launchWindowsProcess ??
+          launchWindowsJobProcess)(command, args, spawnOptions);
+        proc = launched.process;
+        windowsJob = launched.job;
+      } else {
+        proc = spawnProcess(command, args, spawnOptions);
+      }
       this.ownsProcessGroup = detached && Number.isSafeInteger(proc.pid);
       this.ownsOsProcessTree = !this.options.spawnProcess && runtimePlatform === "linux";
       this.leaderStartTime = proc.pid ? readProcessStartTime(proc.pid) : undefined;
@@ -439,17 +459,29 @@ export class RpcProcess {
       if (
         proc.pid &&
         runtimePlatform === "win32" &&
-        (!this.options.spawnProcess || this.options.createWindowsJob)
+        (windowsJob || this.options.createWindowsJob)
       ) {
         this.processOwnership = createProcessOwnership({
           platform: runtimePlatform,
           lifecycle: {
-            gracefulTerminate: () => this.signalProcess(proc, "SIGTERM"),
+            gracefulTerminate: () => this.requestCooperativeShutdown(proc),
             forceTerminate: () => this.signalProcess(proc, "SIGKILL"),
             waitForTermination: (timeoutMs) => this.awaitTermination(timeoutMs),
             awaitTreeTermination: async () => undefined,
+            reportDiagnostic: (error) => {
+              const limit = Math.max(
+                0,
+                this.options.stderrTailMaxBytes ?? STDERR_TAIL_MAX_BYTES,
+              );
+              this.stderr = boundedUtf8Tail(
+                `${this.stderr}${this.stderr ? "\n" : ""}process ownership: ${error.message}`,
+                limit,
+              );
+            },
           },
-          createWindowsJob: this.options.createWindowsJob,
+          createWindowsJob: windowsJob
+            ? () => windowsJob!
+            : this.options.createWindowsJob,
         });
         await this.processOwnership.attach(proc.pid);
       }
@@ -1217,6 +1249,13 @@ export class RpcProcess {
     this.ownedDescendantPids.clear();
     clearTimeout(this.lifecycleCorrelationTimer);
     this.lifecycleCorrelationTimer = undefined;
+  }
+
+  private requestCooperativeShutdown(
+    proc: ChildProcessWithoutNullStreams,
+  ): void {
+    if (!proc.stdin.writable || this.isTerminated(proc)) return;
+    proc.stdin.end();
   }
 
   private signalProcess(
