@@ -34,6 +34,11 @@ import {
   LIFECYCLE_STATUS_KEY,
   type LifecycleMarker,
 } from "./runtime/lifecycle-protocol.ts";
+import {
+  createProcessOwnership,
+  type ProcessOwnership,
+} from "./runtime/process-ownership.ts";
+import type { WindowsJobHandle } from "./runtime/windows-job.ts";
 
 const DEFAULT_PENDING_REQUEST_LIMIT = 1_024;
 const DEFAULT_TOMBSTONE_LIMIT = 1_024;
@@ -223,6 +228,9 @@ export interface RpcProcessOptions {
   lifecycleCorrelationTimeoutMs?: number;
   /** Internal regression seam for non-delegated login-session cgroups. */
   forceSystemdScope?: boolean;
+  /** Internal platform seam for ownership transport regression tests. */
+  platform?: NodeJS.Platform;
+  createWindowsJob?: () => WindowsJobHandle;
   spawnProcess?: RpcSpawnProcess;
 }
 
@@ -271,6 +279,7 @@ export class RpcProcess {
   private terminalEventEmitted = false;
   private terminalEventScheduled = false;
   private stopPromise?: Promise<void>;
+  private processOwnership?: ProcessOwnership;
   private ownsProcessGroup = false;
   private ownsOsProcessTree = false;
   private ownedCgroupPath?: string;
@@ -335,14 +344,15 @@ export class RpcProcess {
     let systemdScopeUnit: string | undefined;
     try {
       const spawnProcess = this.options.spawnProcess ?? defaultSpawnProcess;
-      const detached = !this.options.spawnProcess && process.platform !== "win32";
+      const runtimePlatform = this.options.platform ?? process.platform;
+      const detached = !this.options.spawnProcess && runtimePlatform !== "win32";
       const requiresOwnedTree = !this.options.spawnProcess &&
         canLaunchThroughWrapper(this.command);
-      if (requiresOwnedTree && process.platform !== "linux")
+      if (requiresOwnedTree && runtimePlatform !== "linux" && runtimePlatform !== "win32")
         throw new Error(
-          "Persistent RPC process-tree ownership requires Linux cgroup v2",
+          "Persistent RPC process-tree ownership requires Linux cgroup v2 or Windows Job Objects",
         );
-      if (requiresOwnedTree) {
+      if (requiresOwnedTree && runtimePlatform === "linux") {
         try {
           accessSync(BWRAP_PATH, fsConstants.X_OK);
         } catch {
@@ -351,10 +361,12 @@ export class RpcProcess {
           );
         }
       }
-      this.ownedCgroupPath = requiresOwnedTree && !this.options.forceSystemdScope
+      this.ownedCgroupPath = requiresOwnedTree && runtimePlatform === "linux" &&
+          !this.options.forceSystemdScope
         ? createOwnedCgroup()
         : undefined;
-      discoverSystemdScope = requiresOwnedTree && !this.ownedCgroupPath;
+      discoverSystemdScope = requiresOwnedTree && runtimePlatform === "linux" &&
+        !this.ownedCgroupPath;
       if (discoverSystemdScope) {
         systemdScopeUnit =
           `pi-subagent-rpc-${process.pid}-${Date.now()}-${++cgroupSequence}`;
@@ -411,7 +423,7 @@ export class RpcProcess {
         detached,
       });
       this.ownsProcessGroup = detached && Number.isSafeInteger(proc.pid);
-      this.ownsOsProcessTree = !this.options.spawnProcess && process.platform === "linux";
+      this.ownsOsProcessTree = !this.options.spawnProcess && runtimePlatform === "linux";
       this.leaderStartTime = proc.pid ? readProcessStartTime(proc.pid) : undefined;
     } catch (error) {
       this.cleanupOwnedCgroup();
@@ -423,6 +435,24 @@ export class RpcProcess {
     this.attachProcess(proc);
 
     try {
+      const runtimePlatform = this.options.platform ?? process.platform;
+      if (
+        proc.pid &&
+        runtimePlatform === "win32" &&
+        (!this.options.spawnProcess || this.options.createWindowsJob)
+      ) {
+        this.processOwnership = createProcessOwnership({
+          platform: runtimePlatform,
+          lifecycle: {
+            gracefulTerminate: () => this.signalProcess(proc, "SIGTERM"),
+            forceTerminate: () => this.signalProcess(proc, "SIGKILL"),
+            waitForTermination: (timeoutMs) => this.awaitTermination(timeoutMs),
+            awaitTreeTermination: async () => undefined,
+          },
+          createWindowsJob: this.options.createWindowsJob,
+        });
+        await this.processOwnership.attach(proc.pid);
+      }
       const startupTimeout =
         this.options.startupTimeoutMs ?? DEFAULT_RPC_STARTUP_TIMEOUT_MS;
       if (discoverSystemdScope && proc.pid) {
@@ -473,30 +503,36 @@ export class RpcProcess {
       this.captureOwnedProcessGroupMembers(proc.pid);
     }
     try {
-      if (!confirmed) {
-        try {
-          this.signalProcess(proc, "SIGTERM");
-        } catch {
-          // Confirmed process events/fields below remain authoritative.
-        }
-        confirmed = await this.awaitTermination(grace);
-      }
-      if (!confirmed) {
-        try {
-          this.signalProcess(proc, "SIGKILL");
-        } catch {
-          // Confirmed process events/fields below remain authoritative.
-        }
-        confirmed = await this.awaitTermination(grace);
-      }
-      if (!confirmed)
-        throw new Error(
-          `Child process ${proc.pid ?? "?"} did not terminate after SIGKILL`,
-        );
-      if (this.ownsOsProcessTree && proc.pid) {
-        this.signalProcess(proc, "SIGKILL");
-        await this.awaitProcessTreeTermination(proc.pid, grace);
+      if (this.processOwnership && !confirmed) {
+        await this.processOwnership.terminate(grace);
+        confirmed = this.confirmTerminationFromFields(proc);
         processTreeConfirmed = true;
+      } else {
+        if (!confirmed) {
+          try {
+            this.signalProcess(proc, "SIGTERM");
+          } catch {
+            // Confirmed process events/fields below remain authoritative.
+          }
+          confirmed = await this.awaitTermination(grace);
+        }
+        if (!confirmed) {
+          try {
+            this.signalProcess(proc, "SIGKILL");
+          } catch {
+            // Confirmed process events/fields below remain authoritative.
+          }
+          confirmed = await this.awaitTermination(grace);
+        }
+        if (!confirmed)
+          throw new Error(
+            `Child process ${proc.pid ?? "?"} did not terminate after SIGKILL`,
+          );
+        if (this.ownsOsProcessTree && proc.pid) {
+          this.signalProcess(proc, "SIGKILL");
+          await this.awaitProcessTreeTermination(proc.pid, grace);
+          processTreeConfirmed = true;
+        }
       }
 
       this.scheduleTerminalAfterDrain(proc);
@@ -509,6 +545,8 @@ export class RpcProcess {
         (confirmed || this.confirmTerminationFromFields(proc)) &&
         processTreeConfirmed
       ) {
+        await this.processOwnership?.dispose();
+        this.processOwnership = undefined;
         this.cleanupTransport();
         this.proc = undefined;
       } else {
@@ -694,6 +732,8 @@ export class RpcProcess {
     }
     await this.terminalEventDone.promise;
     if (this.proc !== proc) return;
+    await this.processOwnership?.dispose();
+    this.processOwnership = undefined;
     this.cleanupTransport();
     this.proc = undefined;
   }
