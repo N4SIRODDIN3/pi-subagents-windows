@@ -350,7 +350,8 @@ function deferred(): { promise: Promise<void>; resolve(): void } {
 }
 
 describe("broker transport security", () => {
-  test("creates a private socket location, removes it safely, and rejects symlink directories", async () => {
+  // POSIX-only: filesystem sockets carry owner/mode/inode identity. Windows uses named pipes.
+  test.skipIf(process.platform === "win32")("creates a private socket location, removes it safely, and rejects symlink directories", async () => {
     const outer = createBrokerTransportTempDir("pi-broker-mode-");
     const socketDirectory = path.join(outer, "owned");
     const socketPath = path.join(socketDirectory, "broker.sock");
@@ -388,7 +389,8 @@ describe("broker transport security", () => {
     }
   });
 
-  test("cleans the transport directory when connection acquisition ends early", async () => {
+  // POSIX-only: filesystem sockets carry owner/mode/inode identity. Windows uses named pipes.
+  test.skipIf(process.platform === "win32")("cleans the transport directory when connection acquisition ends early", async () => {
     const directory = createBrokerTransportTempDir("pi-broker-transport-");
     const socketPath = path.join(directory, "broker.sock");
     let root: RootTreeBroker | undefined;
@@ -421,7 +423,8 @@ describe("broker transport security", () => {
     expect(fs.existsSync(directory)).toBe(false);
   });
 
-  test("scavenges only inode-stable stale owned sockets after SIGKILL", async () => {
+  // POSIX-only: filesystem sockets carry owner/mode/inode identity. Windows uses named pipes.
+  test.skipIf(process.platform === "win32")("scavenges only inode-stable stale owned sockets after SIGKILL", async () => {
     const directory = createBrokerTransportTempDir("pi-broker-stale-");
     const stalePath = path.join(directory, `${"a".repeat(24)}.sock`);
     const ownPath = path.join(directory, `${"b".repeat(24)}.sock`);
@@ -473,7 +476,8 @@ describe("broker transport security", () => {
     }
   });
 
-  test("maintenance dry-run reports stale sockets and CLI apply removes only stale sockets", async () => {
+  // POSIX-only: filesystem sockets carry owner/mode/inode identity. Windows uses named pipes.
+  test.skipIf(process.platform === "win32")("maintenance dry-run reports stale sockets and CLI apply removes only stale sockets", async () => {
     const directory = createBrokerTransportTempDir("pi-broker-maintenance-");
     const stalePath = path.join(directory, `${"d".repeat(24)}.sock`);
     const activePath = path.join(directory, `${"e".repeat(24)}.sock`);

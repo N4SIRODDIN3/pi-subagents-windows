@@ -566,8 +566,11 @@ describe("RpcProcess transport and OS invariants", () => {
       expect(events.some((event) => event.type === "fake_signal")).toBe(false);
     else
       expect(events.some((event) => event.type === "fake_signal")).toBe(true);
+    // Windows has no POSIX signal delivery. The fixture treats SIGTERM ignoring as
+    // unreachable there, so cooperative stdin EOF completes the shutdown and the
+    // platform contract is a terminated leader reporting no signal.
     expect(events.find((event) => event.type === "process_exit")?.signal).toBe(
-      "SIGKILL",
+      process.platform === "win32" ? null : "SIGKILL",
     );
     expect(client.pid).toBeUndefined();
   });

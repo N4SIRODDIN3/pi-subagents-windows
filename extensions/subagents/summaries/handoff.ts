@@ -6,7 +6,13 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { SubagentSettings } from "../types.ts";
-import { argsSummary, bytes, extractMessageText, oneLine } from "../utils.ts";
+import {
+  argsSummary,
+  bytes,
+  concreteProviderHeaders,
+  extractMessageText,
+  oneLine,
+} from "../utils.ts";
 
 export function selectRecentMessages(
   messages: AgentMessage[],
@@ -131,7 +137,7 @@ export async function generateHandoffSummary(
           model,
           Math.max(1_000, Math.floor(settings.handoffTokenBudget / 2)),
           auth.apiKey,
-          auth.headers,
+          concreteProviderHeaders(auth.headers),
           signal,
           instructions,
           undefined,

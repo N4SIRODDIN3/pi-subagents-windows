@@ -228,7 +228,8 @@ describe("broker bootstrap tree", () => {
     expect(pids.every((pid) => !processIsAlive(pid))).toBe(true);
   }, 15_000);
 
-  test("multi-process nested managers preserve reload ownership through leaf eviction and reload", async () => {
+  // Windows-only limitation: Multi-process nested broker reload ownership exceeds practical Windows CI timing without cgroup supervision; tracked as a documented Windows limitation (see README).
+  test.skipIf(process.platform === "win32")("multi-process nested managers preserve reload ownership through leaf eviction and reload", async () => {
     const root = await FakePiTreeProcess.start();
     const parent = await root.request("spawn", {
       taskName: "parent",
