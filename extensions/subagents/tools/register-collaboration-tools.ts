@@ -133,6 +133,7 @@ export function registerCollaborationTools(state: SubagentRuntimeState): void {
       "Persistence is runtime-scoped: /reload, resume, fork, or a new Pi runtime invalidates prior live handles; use list_agents and spawn replacements.",
       "All spawn_agent agents share cwd/filesystem; parallel research should be read-only and parallel writers need disjoint paths or worktrees.",
       "Pi depth enforcement is one of two intentional Codex-v2 divergences; the other is the user-requested wait_agent contract.",
+      "model/thinking are optional per-agent overrides; omit them to inherit the spawning agent's configuration, and remember descendants inherit the override you set.",
     ],
     parameters: SpawnAgentParams,
     executionMode: "parallel",

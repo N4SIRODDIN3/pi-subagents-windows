@@ -74,6 +74,26 @@ export const AskParentParams = Type.Object(
   strict,
 );
 
+/** Thinking levels Pi accepts on the child command line. */
+export const THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type SpawnThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+/**
+ * `provider/model-id`. The provider segment mirrors Pi's own identifiers and the
+ * model-id segment is an opaque registry id, so only the shape is constrained
+ * here; existence is validated against the model registry at spawn time.
+ */
+const MODEL_REFERENCE_PATTERN = String.raw`^[A-Za-z0-9][A-Za-z0-9._-]*/[^\s/]+$`;
+
 export const SpawnAgentParams = Type.Object(
   {
     task_name: Type.String({
@@ -92,6 +112,20 @@ export const SpawnAgentParams = Type.Object(
         description:
           "Optional number of turns to fork. Defaults to `all`. Use `none`, `all`, or a positive integer string such as `3`.",
         default: "all",
+      }),
+    ),
+    model: Type.Optional(
+      Type.String({
+        minLength: 3,
+        pattern: MODEL_REFERENCE_PATTERN,
+        description:
+          "Optional `provider/model-id` for this agent. Omit to inherit the spawning agent's model. Children of this agent inherit its choice unless they override it.",
+      }),
+    ),
+    thinking: Type.Optional(
+      StringEnum(THINKING_LEVELS, {
+        description:
+          "Optional thinking level for this agent. Omit to inherit the spawning agent's level.",
       }),
     ),
   },
