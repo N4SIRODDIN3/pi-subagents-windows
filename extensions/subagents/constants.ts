@@ -100,6 +100,27 @@ export const DEFAULT_CHILD_ENV_ALLOWLIST = [
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
   "AWS_REGION",
+  // Windows essentials: without these a child Pi process cannot resolve its
+  // own system root, temp directory, or user profile, and nested spawning
+  // fails before the extension even loads.
+  "SystemRoot",
+  "SYSTEMROOT",
+  "SystemDrive",
+  "windir",
+  "WINDIR",
+  "TEMP",
+  "TMP",
+  "USERPROFILE",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "USERNAME",
+  "PATHEXT",
+  "ComSpec",
+  "COMSPEC",
+  "NUMBER_OF_PROCESSORS",
+  "PROCESSOR_ARCHITECTURE",
 ];
 export const COLLABORATION_TOOL_NAMES = [
   "spawn_agent",
