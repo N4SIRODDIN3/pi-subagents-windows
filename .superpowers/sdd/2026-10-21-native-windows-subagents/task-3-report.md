@@ -120,6 +120,63 @@ The complete captured output was emitted by the test command; no unrelated faili
 4. **Windows graceful signal semantics.** Node's `SIGTERM` on Windows is not POSIX signal delivery. The adapter preserves the existing grace interval/escalation contract, but OS-level termination may occur immediately; `TerminateJobObject` remains the forced whole-tree guarantee.
 5. **Helper startup cost.** Compiling the small C# P/Invoke bridge with `Add-Type` adds several hundred milliseconds to real Windows RPC startup in focused tests.
 
+## Fix round 1 (reviewer P1/P2 findings)
+
+Implementation commit: `7fb9921` (`fix: harden Windows process ownership`). This section supersedes the original attach-after-spawn and Windows graceful-signal descriptions above.
+
+### Corrective changes
+
+- Replaced attach-after-spawn ownership with a source-visible PowerShell/.NET launcher that calls `CreateProcessW` with `CREATE_SUSPENDED`, assigns the suspended leader to a kill-on-close Job Object, and only then calls `ResumeThread`.
+- Added an assignment/resume readiness marker filtered out before RPC stdout framing begins. RPC startup fails closed if the launcher exits, errors, or cannot complete atomic assignment.
+- Returned the launcher process as the RPC transport owner while the child inherits its stdin/stdout/stderr handles. Killing the launcher closes the retained Job handle and reaps the complete child tree.
+- Replaced Windows `child.kill("SIGTERM")` with documented Pi RPC cooperative shutdown: close child stdin, wait the existing shutdown grace period, then force-close the Job if the child has not exited.
+- On Job-helper kill error or timeout, ownership records the diagnostic, attempts the leader fallback, and continues bounded termination confirmation.
+- Removed PowerShell selection from mutable `SystemRoot`, `WINDIR`, and `ProgramFiles`. Selection now uses the canonical protected-root path `C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`, verifies `realpath` does not escape that path, and ignores environment tampering.
+- Deduplicated Windows child environment keys case-insensitively and pins `SystemRoot`/`WINDIR` to the protected root without expanding the inherited allowlist.
+- Added Windows/POSIX test branching and a real Windows descendant cleanup test. The descendant is created immediately after child startup and is confirmed dead after Job cleanup.
+
+### Fix-round verification
+
+Focused command:
+
+```text
+npm test -- extensions/subagents/tests/process-ownership.test.ts extensions/subagents/tests/rpc-process.test.ts
+```
+
+Result: **39 passed, 0 failed**.
+
+Coverage includes:
+
+- `CREATE_SUSPENDED` launch and assign-before-resume ordering.
+- Tampered Windows path environment cannot select a fake PowerShell.
+- Helper force-close error and helper-hang timeout handling.
+- Cooperative EOF shutdown before forced Job cleanup.
+- Platform-specific signal assertions.
+- Real Windows descendant inheritance and cleanup.
+- Existing RPC framing, timeout, drain, error, and bounded-state tests on Windows.
+
+Typecheck command:
+
+```text
+npm run typecheck
+```
+
+Result: only the two pre-existing `ProviderHeaders` incompatibilities remain in `summaries/completion.ts:67` and `summaries/handoff.ts:134`; no Task 3 files report type errors.
+
+Full-suite command:
+
+```text
+npm test
+```
+
+Result on this Windows host: **212 passed, 68 failed, 1 error**. Focused process ownership and RPC suites are fully green. The full-suite failures remain dominated by out-of-scope Windows broker socket mode/ownership assumptions, inherited `PI_SUBAGENT_BRIDGE_DIR`, and broader timing-sensitive manager tests. Parallel full-suite load also exposed PowerShell `Add-Type` startup cost in unrelated manager tests; the atomic launcher fails closed rather than running an unowned child.
+
+### Remaining concerns
+
+1. The protected-root resolver currently supports the standard `C:\\Windows` installation only. A Windows installation on another volume fails closed; supporting it without trusting mutable environment variables requires a small reviewed native `GetSystemWindowsDirectoryW` resolver.
+2. Each launch starts PowerShell and compiles the source-visible C# bridge with `Add-Type`. Focused RPC tests pass, but high parallel test load can incur several hundred milliseconds per launch and can amplify unrelated suite timeouts.
+3. The helper is source-visible and has no checked-in binary dependency, but it remains a PowerShell/.NET fallback rather than an in-process Node native binding.
+
 ## Scope
 
-All implementation/test edits are within the assigned paths. This report is at the explicitly requested report path. Pre-existing untracked `NUL` and `docs/superpowers/plans/` entries were not modified or committed.
+All implementation/test edits are within the Task 3 runtime and test paths, including the reviewer-requested `rpc-process.test.ts` platform coverage. This report is at the explicitly requested report path. Pre-existing untracked `NUL` and `docs/superpowers/plans/` entries were not modified or committed.
