@@ -41,7 +41,7 @@ listed under [Known limitations](#known-limitations).
 From this repository:
 
 ```powershell
-pi install git:github.com/<owner>/pi-subagents-windows
+pi install git:github.com/N4SIRODDIN3/pi-subagents-windows
 ```
 
 Or load it for a single run:
