@@ -191,17 +191,35 @@ public static class PiWindowsJobLauncher {
 $assembly = $env:PI_WINDOWS_JOB_ASSEMBLY
 if (-not $assembly) { Add-Type -TypeDefinition $source -Language CSharp }
 else {
-  $loaded = $false
-  if (Test-Path -LiteralPath $assembly) {
-    try { [void][Reflection.Assembly]::LoadFrom($assembly); $loaded = $true } catch { $loaded = $false }
+  # The cache lives in a user-writable directory, so the bytes are verified
+  # against a sidecar SHA-256 written at compile time and loaded from the exact
+  # buffer that was hashed. Loading straight from the path would let a planted
+  # or swapped DLL run inside this session.
+  $digest = { param($bytes) [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace('-', '') }
+  $sidecar = "$assembly.sha256"
+  $loadVerified = {
+    if (-not (Test-Path -LiteralPath $assembly)) { return $false }
+    if (-not (Test-Path -LiteralPath $sidecar)) { return $false }
+    try {
+      $expected = ([IO.File]::ReadAllText($sidecar)).Trim().ToUpperInvariant()
+      if ($expected.Length -ne 64) { return $false }
+      $bytes = [IO.File]::ReadAllBytes($assembly)
+      if ((& $digest $bytes) -ne $expected) { return $false }
+      [void][Reflection.Assembly]::Load($bytes)
+      return $true
+    } catch { return $false }
   }
+  $loaded = & $loadVerified
   if (-not $loaded) {
     $directory = Split-Path -Parent $assembly
     if (-not (Test-Path -LiteralPath $directory)) { [void](New-Item -ItemType Directory -Force -Path $directory) }
     $staging = "$assembly.$PID.tmp"
     Add-Type -TypeDefinition $source -Language CSharp -OutputAssembly $staging -OutputType Library
+    $compiled = [IO.File]::ReadAllBytes($staging)
+    $compiledHash = & $digest $compiled
     Move-Item -Force -LiteralPath $staging -Destination $assembly
-    [void][Reflection.Assembly]::LoadFrom($assembly)
+    [IO.File]::WriteAllText($sidecar, $compiledHash)
+    [void][Reflection.Assembly]::Load($compiled)
   }
 }
 $payloadJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PI_WINDOWS_JOB_LAUNCH))
@@ -454,7 +472,7 @@ function minimalPowerShellEnvironment(
     SystemRoot: PROTECTED_WINDOWS_ROOT,
     WINDIR: PROTECTED_WINDOWS_ROOT,
     SystemDrive: "C:",
-    ComSpec: "C:\Windows\System32\cmd.exe",
+    ComSpec: "C:\\Windows\\System32\\cmd.exe",
     PATHEXT: ".COM;.EXE;.BAT;.CMD",
     NUMBER_OF_PROCESSORS: "1",
     PROCESSOR_ARCHITECTURE: "AMD64",

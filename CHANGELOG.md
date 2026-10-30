@@ -5,6 +5,24 @@ first, grouped by user impact.
 
 ## [Unreleased]
 
+### Security
+
+- **Windows launcher cache is now integrity-checked.** The compiled Job Object
+  helper is only loaded when its bytes match a sidecar SHA-256 recorded at
+  compile time, and it is loaded from the exact buffer that was verified. A
+  planted or swapped DLL in the user-writable cache is rejected and rebuilt
+  instead of executed. Regression tests cover planting, a missing sidecar, and
+  the sidecar contract.
+- Fixed a malformed `ComSpec` literal in the helper environment that evaluated to
+  the drive-relative path `C:WindowsSystem32cmd.exe` instead of
+  `C:\Windows\System32\cmd.exe`.
+- CI now runs with least-privilege `contents: read` permissions and fails on high
+  severity runtime dependency advisories. A lockfile and Dependabot config were
+  added for reproducible, monitored installs.
+- Added `SECURITY.md` documenting the threat model, the same-user trust
+  boundary, the proof-of-concept results for broker authorization, and the
+  accepted limitations (named-pipe DACL, `PATH` inheritance).
+
 ### Added
 
 - **Per-agent model and thinking assignment.** `spawn_agent` accepts optional
