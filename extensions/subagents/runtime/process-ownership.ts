@@ -1,8 +1,5 @@
 import { errorMessage } from "../utils.ts";
-import {
-  WindowsJob,
-  type WindowsJobHandle,
-} from "./windows-job.ts";
+import type { WindowsJobHandle } from "./windows-job.ts";
 
 export interface ProcessOwnership {
   attach(pid: number): Promise<void>;
@@ -11,10 +8,11 @@ export interface ProcessOwnership {
 }
 
 export interface ProcessOwnershipLifecycle {
-  gracefulTerminate(): void;
+  gracefulTerminate(): void | Promise<void>;
   forceTerminate(): void | Promise<void>;
   waitForTermination(timeoutMs: number): Promise<boolean>;
   awaitTreeTermination(timeoutMs: number): Promise<void>;
+  reportDiagnostic?(error: Error): void;
 }
 
 export interface ProcessOwnershipOptions {
@@ -59,14 +57,33 @@ class EscalatingProcessOwnership implements ProcessOwnership {
     const timeoutMs = Math.max(0, graceMs);
     let terminated = false;
     try {
-      this.lifecycle.gracefulTerminate();
-    } catch {
-      // Confirmed process state below remains authoritative.
+      await this.lifecycle.gracefulTerminate();
+    } catch (error) {
+      this.lifecycle.reportDiagnostic?.(
+        new Error(`Cooperative child shutdown failed: ${errorMessage(error)}`),
+      );
     }
     terminated = await this.lifecycle.waitForTermination(timeoutMs);
     if (!terminated) {
-      if (this.job) await this.job.terminate();
-      else await this.lifecycle.forceTerminate();
+      let ownershipError: Error | undefined;
+      if (this.job) {
+        try {
+          await this.job.terminate();
+        } catch (error) {
+          ownershipError = new Error(errorMessage(error));
+          this.lifecycle.reportDiagnostic?.(ownershipError);
+        }
+      }
+      if (!this.job || ownershipError) {
+        try {
+          await this.lifecycle.forceTerminate();
+        } catch (error) {
+          const fallback = new Error(errorMessage(error));
+          if (ownershipError)
+            throw new Error(`${ownershipError.message}; leader fallback failed: ${fallback.message}`);
+          throw fallback;
+        }
+      }
       terminated = await this.lifecycle.waitForTermination(timeoutMs);
     }
     if (!terminated)
@@ -91,6 +108,8 @@ export function createProcessOwnership(
   return new EscalatingProcessOwnership(
     options.platform ?? process.platform,
     options.lifecycle,
-    options.createWindowsJob ?? (() => new WindowsJob()),
+    options.createWindowsJob ?? (() => {
+      throw new Error("Windows ownership requires an atomic Job launcher");
+    }),
   );
 }

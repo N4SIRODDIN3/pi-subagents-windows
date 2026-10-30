@@ -377,7 +377,10 @@ describe("RpcProcess transport and OS invariants", () => {
     await client.start();
     const accepted = await client.prompt("__tail_exit__");
     expect(accepted.commandType).toBe("prompt");
-    await waitUntil(() => events.some((event) => event.type === "process_exit"));
+    await waitUntil(
+      () => events.some((event) => event.type === "process_exit"),
+      process.platform === "win32" ? 5_000 : 2_000,
+    );
     const types = events.map((event) => event.type);
     expect(types).toContain("message_end");
     expect(types).toContain("agent_settled");
@@ -530,9 +533,15 @@ describe("RpcProcess transport and OS invariants", () => {
     });
     processes.push(client);
     const events = collectEvents(client);
-    await expect(client.start()).rejects.toThrow(/process error|ENOENT|not writable/);
+    await expect(client.start()).rejects.toThrow(
+      process.platform === "win32"
+        ? /Atomic Windows Job launcher exited before assigning the child/
+        : /process error|ENOENT|not writable/,
+    );
     await waitUntil(() => events.some((event) => event.type === "process_exit"));
-    expect(events.filter((event) => event.type === "process_error")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "process_error")).toHaveLength(
+      process.platform === "win32" ? 0 : 1,
+    );
     expect(events.filter((event) => event.type === "process_exit")).toHaveLength(1);
     expect(client.pid).toBeUndefined();
   });
@@ -548,16 +557,48 @@ describe("RpcProcess transport and OS invariants", () => {
     expect(client.pid).toBeUndefined();
   });
 
-  test("hard-tears the owned tree after the RPC child ignores SIGTERM", async () => {
+  test("hard-tears the owned tree after cooperative shutdown expires", async () => {
     const client = realProcess({ FAKE_IGNORE_SIGTERM: "1" });
     const events = collectEvents(client);
     await client.start();
     await client.stop();
-    expect(events.some((event) => event.type === "fake_signal")).toBe(true);
+    if (process.platform === "win32")
+      expect(events.some((event) => event.type === "fake_signal")).toBe(false);
+    else
+      expect(events.some((event) => event.type === "fake_signal")).toBe(true);
     expect(events.find((event) => event.type === "process_exit")?.signal).toBe(
       "SIGKILL",
     );
     expect(client.pid).toBeUndefined();
+  });
+
+  test("Windows Job cleanup reaps a descendant created immediately after child startup", async () => {
+    if (process.platform !== "win32") return;
+    const pidFile = path.join(
+      os.tmpdir(),
+      `subagents-windows-grandchild-${process.pid}-${Date.now()}.pid`,
+    );
+    try {
+      const client = realProcess({
+        FAKE_GRANDCHILD_PID_FILE: pidFile,
+        FAKE_GRANDCHILD_DETACHED: "1",
+      });
+      await client.start();
+      await waitUntil(() => fs.existsSync(pidFile));
+      const grandchildPid = Number(fs.readFileSync(pidFile, "utf8"));
+      expect(Number.isSafeInteger(grandchildPid)).toBe(true);
+      await client.stop();
+      await waitUntil(() => {
+        try {
+          process.kill(grandchildPid, 0);
+          return false;
+        } catch {
+          return true;
+        }
+      });
+    } finally {
+      fs.rmSync(pidFile, { force: true });
+    }
   });
 
   test("terminates the owned process group including a signal-ignoring tool child", async () => {
