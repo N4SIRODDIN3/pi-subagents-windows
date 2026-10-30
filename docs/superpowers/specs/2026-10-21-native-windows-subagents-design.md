@@ -88,10 +88,17 @@ processes without `shell: true`. The original upstream shell runners remain in
 the copied test tree for provenance, but package scripts do not depend on them.
 
 The extraction baseline was attempted on native Windows before behavior
-changes. Both upstream shell runners failed during their Linux-specific
+changes. Both upstream shell runners first failed during their Linux-specific
 symlink bootstrap (`ln ... node_modules/@earendil-works/pi-agent-core: No such
-file or directory`), before the compiler or test suite started. This is a
-harness/platform failure, not a known source-test failure.
+file or directory`). The portable runners expose the underlying baseline rather
+than making verification green: the full suite fails on Linux cgroup v2
+ownership, POSIX `0700` broker-directory checks, Unix socket/process behavior,
+and an environment-leak cascade in which earlier integration tests can leave
+`PI_SUBAGENT_BRIDGE_DIR` visible to the later runner-environment test.
+Typechecking against Pi 1.4.0 also reports two preserved API mismatches because
+`ProviderHeaders` permits `null` while completion and handoff summary calls
+expect `Record<string, string>`. These are known baseline failures for later
+platform/API tasks, not successful verification claims for the scaffold.
 
 ## Implementation outline
 

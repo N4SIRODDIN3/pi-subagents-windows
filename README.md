@@ -5,9 +5,14 @@ A standalone port of the persistent collaboration-agents extension from
 extension entry point and canonical collaboration tool contract while native
 Windows process support is developed.
 
-> **Current status:** the source in this scaffold is the unchanged upstream
-> Linux implementation. It still requires Linux process-isolation tools at
-> runtime. Native Windows launching and cleanup are planned follow-up work.
+> **Current baseline status:** the source in this scaffold is the unchanged
+> upstream Linux implementation, not a green native-Windows port. The full
+> Windows suite currently fails where it assumes cgroup v2 process ownership,
+> POSIX `0700` broker directories, Unix sockets/process behavior, and because
+> earlier integration tests can leave `PI_SUBAGENT_BRIDGE_DIR` visible to the
+> later runner-environment test. Typechecking also reports two Pi 1.4.0 API
+> mismatches where `ProviderHeaders` may contain `null`. Native Windows support
+> and these baseline failures are planned follow-up work.
 
 ## Development
 
@@ -24,7 +29,9 @@ npm test
 
 The test and typecheck scripts are Node entry points and do not require Bash.
 They remove inherited `PI_SUBAGENT_*` control variables before starting child
-processes so a live Pi collaboration identity cannot leak into the suite.
+processes so a live Pi collaboration identity cannot leak into the suite. The
+focused runner-environment test passes from a clean launch; the complete suite
+is expected to remain red until the platform work above is implemented.
 
 ## Package entry point
 
