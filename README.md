@@ -19,7 +19,7 @@ that child can spawn a grandchild, bounded by an explicit maximum depth.
 
 Verified on Windows 11 with Node.js 22 / Pi 1.4.0:
 
-- `npm test` — **287 pass, 7 skip, 0 fail** (294 tests, 28 files)
+- `npm test` — **290 pass, 7 skip, 0 fail** (297 tests, 29 files)
 - `npm run typecheck` — clean
 - Live nested smoke test — a root session spawned `child`, `child` spawned
   `grandchild`, and the grandchild's final answer (`GRANDCHILD_OK`) was
@@ -140,6 +140,19 @@ Atomicity details worth knowing:
   must resolve there; a tampered `SystemRoot` cannot redirect execution.
 - Any helper failure, timeout, or hang force-closes the helper, which triggers
   kill-on-close for the whole Job, with a leader-termination fallback.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the threat model, the same-user trust
+boundary, and the accepted limitations. Briefly:
+
+- The cached Windows launcher assembly is SHA-256 verified before every load and
+  loaded from the verified buffer; a planted DLL is rejected and rebuilt.
+- The broker rejects unauthenticated connections, forged capabilities, sibling
+  impersonation, duplicate identities, and cross-agent mutation — each proven
+  with a local proof-of-concept probe, not just asserted.
+- Zero runtime dependencies. Dev-only advisories are tracked by Dependabot and
+  gated by a CI audit step.
 
 ## Known limitations
 

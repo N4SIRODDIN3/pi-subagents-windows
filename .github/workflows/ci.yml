@@ -6,6 +6,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege: CI only reads the repository. No publishing, no PR approval.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     name: verify (${{ matrix.os }})
@@ -23,6 +31,9 @@ jobs:
 
       - name: Install
         run: npm install --no-audit --no-fund
+
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Typecheck
         run: npm run typecheck
