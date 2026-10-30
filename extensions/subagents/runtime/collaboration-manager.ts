@@ -945,10 +945,11 @@ export class CollaborationManager {
     this.waitAbort = controller;
     if (signal?.aborted) controller.abort();
     try {
-      if ("seconds" in parsed) {
-        await waitForClockDelay(parsed.seconds * 1_000, controller.signal);
+      if (parsed.seconds !== undefined) {
+        const seconds = parsed.seconds;
+        await waitForClockDelay(seconds * 1_000, controller.signal);
         return {
-          message: `Waited ${parsed.seconds} second${parsed.seconds === 1 ? "" : "s"}.`,
+          message: `Waited ${seconds} second${seconds === 1 ? "" : "s"}.`,
           timed_out: false,
           completed: [],
           pending: [],

@@ -146,32 +146,59 @@ const WaitDelaySeconds = Type.Integer({
     "Standalone clock delay in seconds (1 to 3,600). It does not select, poll, or wait for agents.",
 });
 
-/** Agent selection and clock delay are distinct, mutually exclusive modes. */
-export const WaitAgentParams = Type.Union([
-  Type.Object(
-    {
-      target: Type.String({
+/**
+ * Agent selection and clock delay are distinct, mutually exclusive modes.
+ *
+ * The root stays `type: "object"` because several providers reject a tool
+ * schema whose root type is not an object (a bare `Type.Union` produces
+ * `anyOf` with no root type). Exclusivity is expressed as a root `anyOf` over
+ * `required`/`not`, which JSON Schema validators and TypeBox's `Value.Check`
+ * both enforce, and `parseWaitAgentInput` re-checks it at runtime.
+ */
+export const WaitAgentParams = Type.Object(
+  {
+    target: Type.Optional(
+      Type.String({
         minLength: 1,
         description:
-          "Wait indefinitely for one same-tree non-self agent (opaque IDs are accepted as compatibility aliases).",
+          "Wait indefinitely for one same-tree non-self agent (opaque IDs are accepted as compatibility aliases). Mutually exclusive with all and seconds.",
       }),
-    },
-    strict,
-  ),
-  Type.Object(
-    {
-      all: Type.Literal(true, {
-        description: "Wait indefinitely for all snapshotted nonterminal descendants.",
+    ),
+    all: Type.Optional(
+      Type.Literal(true, {
+        description:
+          "Wait indefinitely for all snapshotted nonterminal descendants. Mutually exclusive with target and seconds.",
       }),
-    },
-    strict,
-  ),
-  Type.Object(
-    { seconds: WaitDelaySeconds },
-    strict,
-  ),
-  Type.Object({}, strict),
-]);
+    ),
+    seconds: Type.Optional(WaitDelaySeconds),
+  },
+  {
+    ...strict,
+    anyOf: [
+      {
+        required: ["target"],
+        not: { anyOf: [{ required: ["all"] }, { required: ["seconds"] }] },
+      },
+      {
+        required: ["all"],
+        not: { anyOf: [{ required: ["target"] }, { required: ["seconds"] }] },
+      },
+      {
+        required: ["seconds"],
+        not: { anyOf: [{ required: ["target"] }, { required: ["all"] }] },
+      },
+      {
+        not: {
+          anyOf: [
+            { required: ["target"] },
+            { required: ["all"] },
+            { required: ["seconds"] },
+          ],
+        },
+      },
+    ],
+  },
+);
 
 export const ListAgentsParams = Type.Object(
   {

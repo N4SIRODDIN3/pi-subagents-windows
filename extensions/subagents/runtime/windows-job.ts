@@ -330,6 +330,7 @@ export function launchWindowsJobProcess(
     launchOptions.assemblyPath === undefined
       ? windowsJobAssemblyPath()
       : launchOptions.assemblyPath ?? undefined,
+    launcherTempDirectory(),
   );
   const helper = (launchOptions.spawnHelper ?? defaultSpawnHelper)(powershell, [
     "-NoLogo",
@@ -444,13 +445,34 @@ function filterAtomicAssignmentMarker(
 function minimalPowerShellEnvironment(
   payload: string,
   assembly?: string,
+  tempDirectory?: string,
 ): NodeJS.ProcessEnv {
+  // Keep the surface small, but PowerShell needs a writable temp directory to
+  // stage a compiled launcher when the cache is unavailable, and a child Pi
+  // process may have no inherited TEMP of its own.
   return {
     SystemRoot: PROTECTED_WINDOWS_ROOT,
     WINDIR: PROTECTED_WINDOWS_ROOT,
+    SystemDrive: "C:",
+    ComSpec: "C:\Windows\System32\cmd.exe",
+    PATHEXT: ".COM;.EXE;.BAT;.CMD",
+    NUMBER_OF_PROCESSORS: "1",
+    PROCESSOR_ARCHITECTURE: "AMD64",
     PI_WINDOWS_JOB_LAUNCH: payload,
     ...(assembly ? { PI_WINDOWS_JOB_ASSEMBLY: assembly } : {}),
+    ...(tempDirectory ? { TEMP: tempDirectory, TMP: tempDirectory } : {}),
   };
+}
+
+/** A writable staging directory for the launcher helper, independent of profile env. */
+function launcherTempDirectory(): string | undefined {
+  try {
+    const directory = path.win32.join(os.tmpdir(), "pi-subagents");
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    return directory;
+  } catch {
+    return undefined;
+  }
 }
 
 const LAUNCHER_SOURCE_HASH = crypto
@@ -469,8 +491,12 @@ const LAUNCHER_SOURCE_HASH = crypto
 export function windowsJobAssemblyPath(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  const localAppData = env.LOCALAPPDATA;
-  if (!localAppData || !path.win32.isAbsolute(localAppData)) return undefined;
+  // LOCALAPPDATA is absent from an allowlisted child environment, so fall back
+  // to the process temp directory instead of abandoning the cache entirely.
+  const localAppData = env.LOCALAPPDATA && path.win32.isAbsolute(env.LOCALAPPDATA)
+    ? env.LOCALAPPDATA
+    : path.win32.join(os.tmpdir(), "pi-subagents-cache");
+  if (!localAppData) return undefined;
   return path.win32.join(
     localAppData,
     "pi-subagents",
