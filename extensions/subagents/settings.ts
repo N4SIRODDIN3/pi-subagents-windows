@@ -12,6 +12,7 @@ import {
   DEFAULT_RPC_SHUTDOWN_TIMEOUT_MS,
   DEFAULT_RPC_STARTUP_TIMEOUT_MS,
 } from "./constants.ts";
+import { resolveSessionDirectory } from "./runtime/platform-paths.ts";
 import type { SubagentSettings } from "./types.ts";
 
 export const DEFAULT_SETTINGS: SubagentSettings = {
@@ -39,12 +40,6 @@ export const DEFAULT_SETTINGS: SubagentSettings = {
   childEnvAllowlist: [...DEFAULT_CHILD_ENV_ALLOWLIST],
   askParentConfidential: false,
 };
-
-function expandHome(value: string): string {
-  if (value === "~") return os.homedir();
-  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
-  return value;
-}
 
 function clampNumber(
   value: unknown,
@@ -156,7 +151,7 @@ export function loadSettings(
     ),
     shortcut,
     persistSessions: merged.persistSessions !== false,
-    sessionDir: path.resolve(expandHome(sessionDir)),
+    sessionDir: resolveSessionDirectory(sessionDir),
     showInNormalResume: merged.showInNormalResume === true,
     killChildrenOnParentExit: merged.killChildrenOnParentExit !== false,
     allowChildSubagents: merged.allowChildSubagents !== false,
