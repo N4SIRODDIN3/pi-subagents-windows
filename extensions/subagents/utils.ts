@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Deferred, RootTreeIdentity } from "./types.ts";
@@ -8,6 +7,10 @@ import {
   parseAgentPath,
   validateSafeBasename,
 } from "./runtime/agent-path.ts";
+import {
+  requireAbsoluteRuntimePath,
+  resolveTrustedPiInvocation,
+} from "./runtime/platform-paths.ts";
 
 export function now() {
   return Date.now();
@@ -321,9 +324,10 @@ export function readChildBrokerBootstrapEnvironment(
     throw new Error("Child broker path/depth metadata mismatch");
   if (childPath.split("/").slice(0, -1).join("/") !== parentPath)
     throw new Error("Child broker parent path does not own child path");
-  const socketPath = required(CHILD_BROKER_ENV.socketPath);
-  if (!path.isAbsolute(socketPath) || socketPath.includes("\0"))
-    throw new Error("Child broker socket path must be an absolute safe path");
+  const socketPath = requireAbsoluteRuntimePath(
+    required(CHILD_BROKER_ENV.socketPath),
+    "Child broker socket path",
+  );
   const capability = required(CHILD_BROKER_ENV.capability);
   if (!/^[a-f0-9]{64}$/.test(capability))
     throw new Error("Child broker capability is invalid");
@@ -395,34 +399,9 @@ export interface PiInvocationBase {
   prefixArgs: string[];
 }
 
-/** Resolve and pin the launcher without consulting a child-controlled PATH. */
+/** Backward-compatible name for the platform-specific trusted resolver. */
 export function resolvePiInvocationBase(): PiInvocationBase {
-  const currentScript = process.argv[1];
-  const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-  if (currentScript && !isBunVirtualScript && path.isAbsolute(currentScript)) {
-    try {
-      const script = fs.realpathSync(currentScript);
-      return { command: fs.realpathSync(process.execPath), prefixArgs: [script] };
-    } catch {
-      // Fall through to known installation paths.
-    }
-  }
-  const execName = path.basename(process.execPath).toLowerCase();
-  if (!/^(node|bun)(\.exe)?$/.test(execName))
-    return { command: fs.realpathSync(process.execPath), prefixArgs: [] };
-
-  for (const candidate of [
-    path.join(os.homedir(), ".local", "bin", "pi"),
-    "/usr/local/bin/pi",
-    "/usr/bin/pi",
-  ]) {
-    try {
-      return { command: fs.realpathSync(candidate), prefixArgs: [] };
-    } catch {
-      // Try the next fixed location; never search PATH.
-    }
-  }
-  throw new Error("Unable to resolve a trusted absolute Pi executable");
+  return resolveTrustedPiInvocation();
 }
 
 export function getPiInvocation(
