@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file, newest
 first, grouped by user impact.
 
+## [Unreleased]
+
+### Added
+
+- **Per-agent model and thinking assignment.** `spawn_agent` accepts optional
+  `model` (`provider/model-id`) and `thinking` (`off`…`max`). Omitted fields
+  inherit the spawning agent, set fields flow down the tree, and the model is
+  validated against Pi's live registry (existence plus configured credentials)
+  before any capacity is reserved. The resolved `provider/model-id` is written
+  into the child's fork seed so a restored session reports the model it really
+  used.
+
+### Changed
+
+- The spawn schema is now a deliberate divergence from upstream's hidden-metadata
+  profile: `model` and `thinking` are allowed, all other hidden fields
+  (`agent_type`, `reasoning_effort`, `service_tier`, `nickname`) remain rejected.
+
 ## [0.1.0] — 2026-10-21
 
 First native Windows release of the ported subagents extension.

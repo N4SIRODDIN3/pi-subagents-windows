@@ -19,7 +19,7 @@ that child can spawn a grandchild, bounded by an explicit maximum depth.
 
 Verified on Windows 11 with Node.js 22 / Pi 1.4.0:
 
-- `npm test` — **282 pass, 7 skip, 0 fail** (289 tests, 27 files)
+- `npm test` — **287 pass, 7 skip, 0 fail** (294 tests, 28 files)
 - `npm run typecheck` — clean
 - Live nested smoke test — a root session spawned `child`, `child` spawned
   `grandchild`, and the grandchild's final answer (`GRANDCHILD_OK`) was
@@ -81,6 +81,40 @@ With the default `maxDepth = 2`, the root (depth 0) may spawn a child
 cannot spawn again. Raise `maxDepth` in `~/.pi/agent/settings.json` (or a
 trusted project `.pi/settings.json`) to go deeper, subject to the 128-agent
 capacity cap.
+
+## Per-agent model and thinking assignment
+
+`spawn_agent` takes two optional fields beyond the canonical set:
+
+| Field | Shape | Inherited from |
+|---|---|---|
+| `model` | `provider/model-id` (e.g. `deepseek/deepseek-flash`) | the spawning agent's current model |
+| `thinking` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | the spawning agent's current level |
+
+Omit either field and the child inherits the spawning agent — so a tree stays on
+one model unless you say otherwise. Set it and the override flows down: a
+grandchild inherits its own parent's override, not the root's.
+
+```text
+spawn_agent(task_name: "scout", model: "deepseek/deepseek-flash", thinking: "low")
+spawn_agent(task_name: "synth", model: "openai/gpt-5.6-luna")   # grandchild of scout
+```
+
+Cheap scouts fan out, one expensive synthesizer merges the results — with no
+change to how you call the rest of the tree.
+
+The model is resolved against Pi's live model registry **before** any capacity
+is reserved, so a typo or an unauthenticated provider fails the tool call
+immediately instead of half-starting a child:
+
+```text
+Unknown model 'deepseek/deepseek-v4-flash'. Use 'provider/model-id' from pi --list-models.
+Model 'openai/gpt-5.6-luna' has no configured credentials in this Pi session.
+```
+
+This is a deliberate divergence from upstream's "hidden metadata" profile, which
+exposes no model/reasoning overrides at all. Every other hidden field
+(`agent_type`, `reasoning_effort`, `service_tier`, `nickname`) stays rejected.
 
 ## How Windows support works
 

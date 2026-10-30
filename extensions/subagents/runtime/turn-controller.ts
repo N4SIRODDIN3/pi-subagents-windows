@@ -31,6 +31,9 @@ interface LiveRecordFactoryBase {
   message: string;
   sessionDir: string;
   createdAt?: number;
+  /** Resolved `provider/model-id` override, inherited when omitted. */
+  model?: string;
+  thinkingLevel?: string;
 }
 
 export type LiveRecordFactoryInput = LiveRecordFactoryBase &
@@ -127,6 +130,8 @@ export function createLiveSubagentRecord(
     persistentSlotHeld: input.mode === "v2",
     shutdownPromise: undefined,
     forkTurns: input.mode === "v2" ? input.forkTurns : undefined,
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
   };
 }
 

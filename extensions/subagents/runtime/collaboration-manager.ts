@@ -13,7 +13,9 @@ import {
 import {
   parseForkTurns,
   parseWaitAgentInput,
+  THINKING_LEVELS,
   type SpawnAgentInput,
+  type SpawnThinkingLevel,
   type WaitAgentInput,
 } from "../schemas.ts";
 import {
@@ -108,6 +110,8 @@ interface SpawnResult {
   fork_turns: ForkTurns;
   shared_workspace: true;
   omitted_tools?: string[];
+  model?: string;
+  thinking?: string;
 }
 
 interface ReservedRecord {
@@ -548,8 +552,9 @@ export class CollaborationManager {
       const session = record.sessionFile ?? record.forkSessionFile;
       if (session) args.push("--session", session);
       else args.push("--no-session");
-      if (ctx.model) args.push("--model", `${ctx.model.provider}/${ctx.model.id}`);
-      const thinking = this.state.pi.getThinkingLevel?.();
+      const childModel = effectiveSpawnModel(record, ctx);
+      if (childModel) args.push("--model", `${childModel.provider}/${childModel.id}`);
+      const thinking = record.thinkingLevel ?? this.state.pi.getThinkingLevel?.();
       if (thinking) args.push("--thinking", thinking);
       const invocation = getPiInvocation(args, this.state.invocationBase);
       const environment = buildChildBrokerEnvironment({
@@ -708,6 +713,7 @@ export class CollaborationManager {
     const taskName = validateTaskName(params.task_name);
     const message = requireNonEmptyString(params.message, "message");
     const forkTurns = parseForkTurns(params.fork_turns);
+    const assignment = resolveSpawnAssignment(params, ctx);
     // Exact tool inheritance is validated before a name/process reservation.
     const toolSources = this.requireSpawnToolSources();
     const id = makeId();
@@ -727,6 +733,8 @@ export class CollaborationManager {
         ctx,
         forkTurns,
         id,
+        ...(assignment.model ? { model: assignment.model } : {}),
+        ...(assignment.thinking ? { thinkingLevel: assignment.thinking } : {}),
       });
       record = reserved.record;
       this.applyBrokerGrant(record, grant);
@@ -748,6 +756,8 @@ export class CollaborationManager {
         max_depth: record.maxDepth,
         fork_turns: record.forkTurns!,
         shared_workspace: true,
+        ...(record.model ? { model: record.model } : {}),
+        ...(record.thinkingLevel ? { thinking: record.thinkingLevel } : {}),
         ...(record.omittedTools?.length
           ? { omitted_tools: [...record.omittedTools] }
           : {}),
@@ -1368,6 +1378,8 @@ export class CollaborationManager {
       label: string;
       ctx: ExtensionContext;
       id?: string;
+      model?: string;
+      thinkingLevel?: string;
     } &
       (
         | { mode: "v2"; forkTurns: ForkTurns; contextMode?: never }
@@ -1400,6 +1412,8 @@ export class CollaborationManager {
       message: input.message,
       sessionDir,
       createdAt: now(),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.thinkingLevel ? { thinkingLevel: input.thinkingLevel } : {}),
       ...(input.mode === "v2"
         ? { mode: "v2" as const, forkTurns: input.forkTurns }
         : { mode: "legacy" as const, contextMode: input.contextMode }),
@@ -1494,10 +1508,8 @@ export class CollaborationManager {
           },
           cwd: ctx.cwd,
           sessionDir: record.sessionDir!,
-          model: ctx.model
-            ? { provider: ctx.model.provider, id: ctx.model.id }
-            : undefined,
-          thinkingLevel: this.state.pi.getThinkingLevel?.(),
+          model: effectiveSpawnModel(record, ctx),
+          thinkingLevel: record.thinkingLevel ?? this.state.pi.getThinkingLevel?.(),
         });
         record.forkSessionFile = seed.sessionFile;
       }
@@ -1525,8 +1537,9 @@ export class CollaborationManager {
       } else {
         args.push("--no-session");
       }
-      if (ctx.model) args.push("--model", `${ctx.model.provider}/${ctx.model.id}`);
-      const thinking = this.state.pi.getThinkingLevel?.();
+      const childModel = effectiveSpawnModel(record, ctx);
+      if (childModel) args.push("--model", `${childModel.provider}/${childModel.id}`);
+      const thinking = record.thinkingLevel ?? this.state.pi.getThinkingLevel?.();
       if (thinking) args.push("--thinking", thinking);
       const invocation = getPiInvocation(args, this.state.invocationBase);
       const brokerEnvironment = this.childBrokerEnvironment(record, ctx);
@@ -2661,6 +2674,79 @@ function waitForClockDelay(delayMs: number, signal: AbortSignal): Promise<void> 
     };
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+
+interface SpawnAssignment {
+  model?: string;
+  thinking?: SpawnThinkingLevel;
+}
+
+/**
+ * Resolve an optional per-agent model/thinking override.
+ *
+ * The override is validated against Pi's live model registry before any
+ * capacity is reserved, so a typo fails the tool call instead of a child
+ * process. Omitted fields inherit the spawning agent's current configuration,
+ * which keeps the canonical inheritance contract for callers that never set
+ * them.
+ */
+function resolveSpawnAssignment(
+  params: SpawnAgentInput,
+  ctx: ExtensionContext,
+): SpawnAssignment {
+  const assignment: SpawnAssignment = {};
+  const requested = params.model;
+  if (requested !== undefined) {
+    const reference = requireNonEmptyString(requested, "model");
+    const separator = reference.indexOf("/");
+    if (separator <= 0 || separator === reference.length - 1)
+      throw new Error(
+        `model must be 'provider/model-id' (received '${oneLine(reference, 120)}')`,
+      );
+    const provider = reference.slice(0, separator);
+    const modelId = reference.slice(separator + 1);
+    const registry = ctx.modelRegistry;
+    const found = registry?.find(provider, modelId);
+    if (!found)
+      throw new Error(
+        `Unknown model '${reference}'. Use 'provider/model-id' from pi --list-models.`,
+      );
+    if (registry.hasConfiguredAuth && !registry.hasConfiguredAuth(found))
+      throw new Error(
+        `Model '${reference}' has no configured credentials in this Pi session.`,
+      );
+    assignment.model = `${found.provider}/${found.id}`;
+  }
+  const thinking = params.thinking;
+  if (thinking !== undefined) {
+    if (!THINKING_LEVELS.includes(thinking as SpawnThinkingLevel))
+      throw new Error(
+        `thinking must be one of ${THINKING_LEVELS.join(", ")}`,
+      );
+    assignment.thinking = thinking as SpawnThinkingLevel;
+  }
+  return assignment;
+}
+
+
+/**
+ * The model a child process is launched with: its own override when set,
+ * otherwise the spawning agent's current model.
+ */
+function effectiveSpawnModel(
+  record: { model?: string },
+  ctx: ExtensionContext,
+): { provider: string; id: string } | undefined {
+  if (record.model) {
+    const separator = record.model.indexOf("/");
+    if (separator > 0)
+      return {
+        provider: record.model.slice(0, separator),
+        id: record.model.slice(separator + 1),
+      };
+  }
+  return ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
 }
 
 function validateTaskName(value: string): string {

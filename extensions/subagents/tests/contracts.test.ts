@@ -292,11 +292,15 @@ describe("canonical six-tool model projections", () => {
 });
 
 describe("strict hidden-metadata schemas", () => {
-  test("locks spawn to task_name, message, and fork_turns with no name cap", () => {
+  test("locks spawn to task_name, message, fork_turns, model, and thinking", () => {
+    // Pi deliberately adds per-agent model/thinking overrides to Codex's
+    // hidden-metadata profile; every other hidden field stays rejected.
     expect(Object.keys(SpawnAgentParams.properties).sort()).toEqual([
       "fork_turns",
       "message",
+      "model",
       "task_name",
+      "thinking",
     ]);
     expect(
       Value.Check(SpawnAgentParams, {
@@ -313,7 +317,6 @@ describe("strict hidden-metadata schemas", () => {
     ).toBe(false);
     for (const metadata of [
       { agent_type: "worker" },
-      { model: "provider/model" },
       { reasoning_effort: "high" },
       { service_tier: "priority" },
       { nickname: "worker" },
@@ -364,6 +367,33 @@ describe("strict hidden-metadata schemas", () => {
       { seconds: 3_601 },
       { seconds: 1.5 },
     ]) expect(Value.Check(WaitAgentParams, invalid)).toBe(false);
+  });
+
+  test("accepts an optional per-agent model and thinking override", () => {
+    expect(
+      Value.Check(SpawnAgentParams, {
+        task_name: "scout",
+        message: "read the repo",
+        model: "deepseek/deepseek-v4-pro",
+        thinking: "low",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(SpawnAgentParams, {
+        task_name: "scout",
+        message: "read the repo",
+      }),
+    ).toBe(true);
+    for (const invalid of [
+      { task_name: "scout", message: "m", model: "no-slash" },
+      { task_name: "scout", message: "m", model: "/missing-provider" },
+      { task_name: "scout", message: "m", model: "provider/" },
+      { task_name: "scout", message: "m", model: "provider/two words" },
+      { task_name: "scout", message: "m", thinking: "maximal" },
+      { task_name: "scout", message: "m", thinking: "HIGH" },
+      { task_name: "scout", message: "m", model_override: "a/b" },
+    ])
+      expect(Value.Check(SpawnAgentParams, invalid)).toBe(false);
   });
 
   test("rejects unknown fields across all six canonical tools", () => {
